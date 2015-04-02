@@ -42,7 +42,7 @@ def connect(url):
         if not protocol_path.startswith('//'):
             raise ValueError('Invalid Doqapy urL for sqlite backend: %s' % url)
         path = protocol_path[2:]
-        return FedjiSqlite(path)
+        return DoqapySqlite(path)
     elif backend == 'arangodb':
         raise NotImplementedError()
     elif backend == 'mongodb':
