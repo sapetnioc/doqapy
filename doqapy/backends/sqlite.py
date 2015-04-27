@@ -400,13 +400,23 @@ if __name__ == '__main__':
     from shutil import rmtree
     from pprint import pprint
     
-    data = [
-        {'s': 'a',
-         'l': ['i', 'j'],},
-        {'s': 'b',
-         'l': ['j'],},
-        {'s': 'c'},
+    subjects = [
+        {'code': '007',
+         'quadrigram': 'BOND'},
+        {'code': '069',
+         'quadrigram': 'MOJO'},
+        {'code': '000',
+         'quadrigram': 'XXXX'}
     ]
+    
+    centers = [
+        {'code': '001',
+         'name': 'UK'},
+        {'code': '001',
+         'name': 'Russia'},
+    ]
+    
+    
     tmp = mkdtemp()
     try:
         doqapy = DoqapySqlite(tmp)
@@ -416,5 +426,7 @@ if __name__ == '__main__':
         doqapy.db.test.remove(query)
         query = {}
         pprint(list(doqapy.db.test.find(query)))
+        
+        doqapy.db.test.connect(from='from_id', to='to_id' | 'collection/to_id' | 'db/collection/to_id')
     finally:
         rmtree(tmp)

@@ -1,0 +1,25 @@
+select: files
+from:
+    subject: subject
+    action: action
+    output: output
+    files: files
+where:
+    subject.code: =  memento_001007_BOND
+    subject._ref: in $action.concerns
+    output._from: = $action._ref
+    output._to: = $files._ref
+    output.parameter: = mri_3dt1_nifi
+
+sql: |
+    SELECT files.* 
+    FROM subjects 
+    INNER JOIN actions
+    INNER JOIN output
+    INNER JOIN files
+    WHERE
+      subject.code = "memento_001007_BOND"
+      
+      
+# subject._ref IN (SELECT _action_concerns_list.value FROM actions INNER JOIN _action_concerns_list ON actions.rowid = _action_concerns_list.list WHERE )
+# action_concerns.list = action.rowid, action_concerns.value = 'toto
