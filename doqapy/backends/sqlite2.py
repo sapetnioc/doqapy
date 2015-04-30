@@ -13,6 +13,7 @@ from doqapy import (
     DoqapyCollection, 
     _field_type_to_string,
     _string_to_field_type,
+    undefined,
     text_field_type,
     int_field_type,
     float_field_type,
@@ -20,6 +21,7 @@ from doqapy import (
     datetime_field_type,
     date_field_type,
     time_field_type,
+    ref_field_type,
     list_text_field_type,
     list_int_field_type,
     list_float_field_type,
@@ -27,6 +29,7 @@ from doqapy import (
     list_datetime_field_type,
     list_date_field_type,
     list_time_field_type,
+    list_ref_field_type,
 )
 
 
@@ -35,10 +38,13 @@ class DoqapySqliteDatabase(DoqapyDatabase):
     def __init__(self, sqlite_database):
         self.sqlite_database = sqlite_database
         self._cnx = sqlite3.connect(self.sqlite_database, check_same_thread=False)
+        self._init_database()
+    
+    def _init_database(self):
         # Optimize database for a safe single client
         self._cnx.execute('PRAGMA journal_mode = MEMORY')
         self._cnx.execute('PRAGMA synchronous = OFF')
-        self._cnx.execute('PRAGMA locking_mode = EXCLUSIVE')
+        #self._cnx.execute('PRAGMA locking_mode = EXCLUSIVE')
         self._cnx.execute('PRAGMA cache_size = 8192')
         self._cnx.execute('PRAGMA page_size = 10000')
         self._cnx.execute(
@@ -55,11 +61,14 @@ class DoqapySqliteDatabase(DoqapyDatabase):
     def _collection_to_table_name(self, collection):
         return collection.lower().replace('/', '__')
     
-    def get_collection(self, collection):
+    def get_collection(self, collection, default=undefined):
         sql = 'SELECT tbl_name FROM _collections WHERE name="%s"' % collection
         result = self._cnx.execute(sql).fetchone()
         if result is not None:
             return DoqapySqliteCollection(self._cnx, collection, result[0])
+        if default is undefined:
+            raise ValueError('Collection "%s" does not exist' % collection)
+        return default
 
     def create_collection(self, collection):
         table = self._collection_to_table_name(collection)
@@ -87,8 +96,58 @@ class DoqapySqliteDatabase(DoqapyDatabase):
         '''Delete a collection.
         '''
         raise NotImplementedError()
-        
     
+    def drop_database(self):
+        tables = [i[0] for i in self._cnx.execute('SELECT name FROM sqlite_master WHERE type = "table"')]
+        for table in tables:
+            self._cnx.execute('DROP TABLE %s' % table)
+        self._cnx.commit()
+        self._cnx.execute('VACUUM')
+        self._init_database()
+    
+    def _build_query(self, from_collections, where_construct):
+        select_collection, select_collection_impl = from_collections.iteritems().next()
+        select = ', '.join('%s.%s' % (select_collection_impl.table, i) for i in select_collection_impl.fields)
+        from_ = ', '.join(i.table for i in from_collections.itervalues())
+        return {
+            'sql': 'SELECT %s FROM %s WHERE %s' % (select, from_, self._query_builder_expression(from_collections, *where_construct)),
+            'fields': select_collection_impl.fields.items(),
+        }
+    
+    def _query_builder_expression(self, from_collections, expression_type, *args):
+        return getattr(self, '_query_builder_%s' % expression_type)(from_collections, *args)
+    
+    def _query_builder_and(self, from_collections, *expressions):
+        return ' AND '.join(self._query_builder_expression(from_collections, *i) for i in expressions)
+    
+    def _query_builder_field_op_literal(self, from_collections, left_collection, left_field, operator, literal):
+        left_table = from_collections[left_collection].table
+        if operator == 'in':
+            literal = '(%s)' % literal
+        else:
+            literal = "'%s'" % literal
+        return '%s.%s %s %s' % (left_table, left_field, operator, literal)
+        
+    def _query_builder_field_op_field(self, from_collections, left_collection, left_field, operator, right_collection, right_field):
+        left_table = from_collections[left_collection].table
+        right_table = from_collections[right_collection].table
+        if operator == 'in':
+            right_field_type = from_collections[right_collection].fields[right_field]
+            if right_field_type[0] is not list:
+                raise TypeError('Cannot use operator "in" on %s.%s that is not a list' % (right_collection, right_field))
+            return '%(left_table)s.%(left_field)s IN (SELECT value FROM _%(right_table)s_list_%(right_field)s WHERE _%(right_table)s_list_%(right_field)s.list = %(right_table)s.rowid)' % dict(left_table=left_table, left_field=left_field, right_table=right_table, right_field=right_field)
+        else:
+            return '%(left_table)s.%(left_field)s %(operator)s %(right_table)s.%(right_field)s' % dict(left_table=left_table, left_field=left_field, right_table=right_table, right_field=right_field, operator=operator)
+
+    def query(self, *args, **kwargs):
+        dict_query = self.parse_query(*args, **kwargs)
+        sql = dict_query['sql']
+        fields = [(i,_sql_to_value[_string_to_field_type[j]]) for i, j in dict_query['fields'].iteritems()]
+        print '!', sql
+        cursor = self._cnx.execute(sql)
+        for row in cursor:
+            yield dict((col[0], self._sql_to_value[?](row[idx])) for idx, col in enumerate(cursor.description))
+        
 class DoqapySqliteCollection(DoqapyCollection):
     _fields_table = '_%s_fields'
     _index_name = '_%s_%s'
@@ -101,6 +160,7 @@ class DoqapySqliteCollection(DoqapyCollection):
         datetime_field_type: 'timestamp',
         date_field_type: 'date',
         time_field_type: 'time',
+        ref_field_type: 'text',
         list_text_field_type: 'text',
         list_int_field_type: 'text',
         list_float_field_type: 'text',
@@ -108,6 +168,7 @@ class DoqapySqliteCollection(DoqapyCollection):
         list_datetime_field_type: 'text',
         list_date_field_type: 'text',
         list_time_field_type: 'text',
+        list_ref_field_type: 'text',
     }
     _value_to_sql = {
         datetime_field_type: lambda x: x.isoformat(),
@@ -120,6 +181,7 @@ class DoqapySqliteCollection(DoqapyCollection):
         list_datetime_field_type: lambda x: '\t'.join(i.isoformat() for i in x),
         list_date_field_type: lambda x: '\t'.join(i.isoformat() for i in x),
         list_time_field_type: lambda x: '\t'.join(i.isoformat() for i in x),
+        list_ref_field_type: lambda x: '\t'.join(repr(i) for i in x),
     }
     _sql_to_value = {
         bool_field_type: lambda x : (None if x is None else bool(x)),
@@ -133,6 +195,7 @@ class DoqapySqliteCollection(DoqapyCollection):
         list_datetime_field_type: lambda x: (None if x is None else [dateutil.parser.parse(i) for i in x.split('\t')]),
         list_date_field_type: lambda x: (None if x is None else [dateutil.parser.parse(i).date() for i in x.split('\t')]),
         list_time_field_type: lambda x: (None if x is None else [dateutil.parser.parse(i).time() for i in x.split('\t')]),
+        list_ref_field_type: lambda x: (None if x is None else [eval(i) for i in x.split('\t')]),
     }
     
     def __init__(self, connection, collection, table):
@@ -156,6 +219,10 @@ class DoqapySqliteCollection(DoqapyCollection):
             'ALTER TABLE %s ADD COLUMN %s %s' % (self.table, field_name,
             self._field_type_to_sql[field_type]))
         fields_table = self._fields_table % self.table
+        if field_type[0] is list:
+            list_table = self._list_table % (self.table, field_name)
+            self.cnx.execute('CREATE TABLE %s (list, i, value)' % list_table)
+            self.cnx.execute('CREATE INDEX %s_index ON %s (list)' % (list_table, list_table))
         self.cnx.execute(
             "INSERT INTO %s VALUES (?, ?)" % fields_table,
             (field_name, _field_type_to_string[field_type]))
@@ -221,26 +288,60 @@ class DoqapySqliteCollection(DoqapyCollection):
 if __name__ == '__main__':
     import sys
     from random import random
+    from collections import OrderedDict
     
-    doqapy = DoqapySqliteDatabase('/tmp/test.sqlite')
+    db_file = '/tmp/test.sqlite'
+    if osp.exists(db_file):
+        os.remove(db_file)
+    doqapy = DoqapySqliteDatabase(db_file)
+    
+    #for c in ('subject','action','output','files'):
+        #doqapy.create_collection(c)
+    #for f, t, i in (
+        #('subject.code', 'unicode', True),
+        #('action.concerns', 'list_ref', False),
+        #('output._to', 'ref', True),
+        #('output._from', 'ref', True),
+        #('output.parameter', 'unicode', True)):
+        #doqapy.create_field(f, t, i)
+    #query = OrderedDict([
+        #('files._ref', '= $output._to'),
+        #('subject.code', 'memento_001007_BOND'),
+        #('subject._ref', 'in $action.concerns'),
+        #('output._from', '= $action._ref'),
+        #('output.parameter', '= mri_3dt1_nifi')])
+    #sql = doqapy.parse_query(query)
+    #print sql
+    #print list(doqapy._cnx.execute(sql))
+    #sys.exit()
+    
+    
     doqapy.create_collection('studies')
     
-    number_of_studies = 10
-    number_of_subjects_per_study = 10
-    number_of_acquisition_per_subject = 20
-    number_of_files_per_acquisition = 10
-    number_of_measures_per_acquisition = 10
+    doqapy.create_collection('subjects')
+    doqapy.create_field('subjects.code', 'unicode', create_index=True)
+    doqapy.create_field('subjects.in_study', 'ref', create_index=True)
+    
+    number_of_studies = 2
+    number_of_subjects_per_study = 4
+    number_of_acquisition_per_subject = 4
+    number_of_files_per_acquisition = 4
+    number_of_measures_per_acquisition = 4
     
     studies = []
     subjects = []
     for i in xrange(number_of_studies):
         study_name = 'study%03d' % i
+        now = datetime.datetime.now()
         study = dict(
+            _ref = 'studies/',
             name = study_name,
             expected_subjects = number_of_subjects_per_study,
-            creation_date = datetime.datetime.now(),
+            creation_datetime = now,
+            creation_date = now.date(),
+            creation_time = now.time()
         )
-        studies.append(doqapy.store_document('studies', study))
+        studies.append(doqapy.store_document(study))
         doqapy.commit()
         
         for j in xrange(number_of_subjects_per_study):
@@ -248,9 +349,10 @@ if __name__ == '__main__':
             subject_code = '%s_%s' % (study_name, subject_id)
             print subject_code
             subject = dict(
-                code = subject_code
+                code = subject_code,
+                in_study = studies[-1],
             )
-            subjects.append(doqapy.store_document('%s/subjects' % study_name, subject))
+            subjects.append(doqapy.store_document(subject, collection='subjects'))
             
             for k in xrange(number_of_acquisition_per_subject):
                 acquisition_type = '%s_acquisition%03d' % (subject_code, k)
@@ -261,8 +363,19 @@ if __name__ == '__main__':
                     acquisition['file_%02d' % l] = '/%s/%s/acquisition_%02d.format' % (study_name, subject_id, l)
                 for l in xrange(number_of_measures_per_acquisition):
                     acquisition['aquisition_measure_%02d' % l] = random() * 100
-                doqapy.store_document('%s/acquisitions' % study_name, acquisition)
+                doqapy.store_document(acquisition, collection='%s/acquisitions' % study_name)
             doqapy.commit()
     
-    doqapy.yaml_dump(open('/tmp/test.yml','w'))
+    doqapy.commit()
     
+    print
+    print 'Dumping to /tmp/test.yml'
+    doqapy.yaml_dump(open('/tmp/test.yml','w'))
+    print 'Restoring from /tmp/test.yml'
+    doqapy.yaml_restore(open('/tmp/test.yml'))
+
+    query = {
+        #'subjects.in_study': '$studies._ref',
+        'studies.name': 'study000',
+    }
+    print list(doqapy.query(query))#, select_collection='subjects'))

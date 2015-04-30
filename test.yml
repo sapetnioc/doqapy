@@ -13,13 +13,16 @@ where:
 
 sql: |
     SELECT files.* 
-    FROM subjects 
-    INNER JOIN actions
-    INNER JOIN output
-    INNER JOIN files
+    FROM subjects, 
+         actions,
+         output,
+         files
     WHERE
-      subject.code = "memento_001007_BOND"
+      subject.code = "memento_001007_BOND" AND
+      subject._ref IN (SELECT value FROM _action_concerns_list ON _action_concerns_list.list = actions.rowid) AND
+      output._from = actions._ref AND
+      output._to = files._ref AND
+      output.parameter = "mri_3dt1_nifi"
       
-      
-# subject._ref IN (SELECT _action_concerns_list.value FROM actions INNER JOIN _action_concerns_list ON actions.rowid = _action_concerns_list.list WHERE )
+ subject._ref IN (SELECT _action_concerns_list.value FROM actions INNER JOIN _action_concerns_list ON actions.rowid = _action_concerns_list.list WHERE )
 # action_concerns.list = action.rowid, action_concerns.value = 'toto

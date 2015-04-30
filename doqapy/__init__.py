@@ -23,11 +23,14 @@ is planned.
 
 import datetime
 import uuid
+import dateutil.parser
+from collections import OrderedDict
 
 text_field_type = (unicode, None)
 int_field_type = (int, None)
 float_field_type = (float, None)
 bool_field_type = (bool, None)
+ref_field_type = (object, None)
 datetime_field_type = (datetime.time, None)
 date_field_type = (datetime.date, None)
 time_field_type = (datetime.datetime, None)
@@ -38,6 +41,7 @@ list_bool_field_type = (list, bool)
 list_datetime_field_type = (list, datetime.time)
 list_date_field_type = (list, datetime.date)
 list_time_field_type = (list, datetime.datetime)
+list_ref_field_type = (list, object)
 
 _field_type_to_string = {
     text_field_type: 'unicode',
@@ -47,6 +51,7 @@ _field_type_to_string = {
     datetime_field_type: 'datetime',
     date_field_type: 'date',
     time_field_type: 'time',
+    ref_field_type: 'ref',
     list_text_field_type: 'list_unicode',
     list_int_field_type: 'list_int',
     list_float_field_type: 'list_float',
@@ -54,12 +59,24 @@ _field_type_to_string = {
     list_datetime_field_type: 'list_datetime',
     list_date_field_type: 'list_date',
     list_time_field_type: 'list_time',
+    list_ref_field_type: 'list_ref',
 }
 
 _string_to_field_type = dict((v,k) for k, v in 
                              _field_type_to_string.iteritems())
 
+undefined = type('undefined',(),{})
+
 class DoqapyDatabase(object):
+    _yaml_to_python = {
+        _field_type_to_string[datetime_field_type]: lambda x: dateutil.parser.parse(x),
+        _field_type_to_string[date_field_type]: lambda x: dateutil.parser.parse(x).date(),
+        _field_type_to_string[time_field_type]: lambda x: dateutil.parser.parse(x).time(),
+        _field_type_to_string[list_datetime_field_type]: lambda x: (None if x is None else [dateutil.parser.parse(i) for i in x.split('\t')]),
+        _field_type_to_string[list_date_field_type]: lambda x: (None if x is None else [dateutil.parser.parse(i).date() for i in x.split('\t')]),
+        _field_type_to_string[list_time_field_type]: lambda x: (None if x is None else [dateutil.parser.parse(i).time() for i in x.split('\t')]),
+    }
+
     def store_document(self, document, collection=None, id=None):
         """Store a document in a collection and returns its reference
         (that is stored in the "_ref" field of the document). The
@@ -79,7 +96,7 @@ class DoqapyDatabase(object):
             id = document.get('_id')
             if id is None:
                 id = str(uuid.uuid4())
-        collection_impl = self.get_collection(collection)
+        collection_impl = self.get_collection(collection, None)
         if collection_impl is None:
             collection_impl = self.create_collection(collection)
 
@@ -102,7 +119,7 @@ class DoqapyDatabase(object):
         collection_impl._store_document(document, id, ref)
         return ref
         
-    def get_collection(self, collection):
+    def get_collection(self, collection, default=undefined):
         '''Return the collection with the given name or None if it does 
         not exsist.
         '''
@@ -125,7 +142,11 @@ class DoqapyDatabase(object):
         '''
         raise NotImplementedError()
 
-    def create_field(self, collection, field_name, field_type, create_index=False):
+    def create_field(self, field_name, field_type, create_index=False):
+        split = field_name.rsplit('.', 1)
+        if len(split) != 2:
+            raise ValueError('Invalid field name (dot is missing): %s' % field_name)
+        collection, field_name = split
         collection_impl = self.get_collection(collection)
         collection_impl.create_field(field_name, _string_to_field_type[field_type])
         if create_index:
@@ -144,38 +165,133 @@ class DoqapyDatabase(object):
         data type
         '''
         collection_impl = self.get_collection(collection)
-        if collection_impl is not None:
-            return dict((k,_field_type_to_string[v]) for k, v in collection_impl.fields.iteritems())
-        return ValueError('Collection "%s" does not exist' % collection)
+        return dict((k,_field_type_to_string[v]) for k, v in collection_impl.fields.iteritems())
     
     def indices(self, collection):
         '''Return a list of all fields that have an index.
         '''
         collection_impl = self.get_collection(collection)
-        if collection_impl is not None:
-            return collection_impl.indices()
-        return ValueError('Collection "%s" does not exist' % collection)
+        return collection_impl.indices()
     
     def documents(self, collection):
         '''Iterates over all documents in a collection
         '''
         collection_impl = self.get_collection(collection)
-        if collection_impl is not None:
-            return collection_impl.documents()
-        return ValueError('Collection "%s" does not exist' % collection)
+        return collection_impl.documents()
+    
+    def drop_database(self):
+        '''Completely clear a database erasing both its schema and the
+        documents.'''
+        raise NotImplementedError()
     
     def yaml_dump(self, file):
+        # Avoid mandatory dependency on yaml for those
+        # who do not call this function
         import yaml
+        ignore_fields = set(('_id', '_ref'))
+        print >> file, '# Schema\n---'
+        schema = {}
         for collection in self.collections():
-            print >> file, collection + ':'
-            print >> file, '  fields:'
-            for field_name, field_type in self.fields(collection).iteritems():
-                print >> file, '    %s: %s' % (field_name, field_type)
-            print >> file, '  indices:', yaml.safe_dump(self.indices(collection)).strip()
-            print >> file, '  documents:'
+            collection_dict = schema[collection] = {
+                'fields': dict((k,v) for k, v in self.fields(collection).iteritems() if k not in ignore_fields),
+                'indices': [i for i in self.indices(collection) if i not in ignore_fields],
+            }
+        yaml.safe_dump(schema, file, default_flow_style=False)
+        
+        print >> file, '\n# Documents'
+        for collection in self.collections():
             for document in self.documents(collection):
-                print >> file, '    -', yaml.safe_dump(document, default_flow_style=False).strip().replace('\n','\n      ')
+                print >> file, '---'
+                document.pop('_id')
+                yaml.safe_dump(document, file, default_flow_style=False)
+
+    def yaml_restore(self, file):
+        # Avoid mandatory dependency on yaml for those
+        # who do not call this function
+        import yaml
+        
+        reader = yaml.load_all(file)
+        
+        # Restore schema
+        schema = reader.next()
+        self.drop_database()
+        for collection, collection_def in schema.iteritems():
+            collection_impl = self.create_collection(collection)
+            for field_name, field_type in collection_def['fields'].iteritems():
+                collection_impl.create_field(field_name, _string_to_field_type[field_type])
+            for field_name in collection_def.get('indices',[]):
+                collection_impl.create_index(field_name)
+        self.commit()
+
+        # Restore documents
+        count = 0
+        for document in reader:
+            fields = self.fields(document['_ref'][:document['_ref'].rfind('/')])
+            new_doc = dict((k,self._yaml_to_python.get(fields[k],lambda x:x)(v)) for k, v in document.iteritems())
+            self.store_document(new_doc)
+            count += 1
+            if count % 500:
+                self.commit()
+        self.commit()
+        
+    _operators = set(('=', '>', '<', '>=', '<=', '!=', 'in', 'has', 'like', '~'))
+    
+    def parse_query(self, query, select_collection=None):
+        where_construct = []
+        from_collections = OrderedDict()
+        if select_collection is not None:
+            from_collections[select_collection] = self.get_collection(select_collection)
+        for left_field, operation in query.iteritems():
+            split = left_field.rsplit('.', 1)
+            if len(split) == 2:
+                left_collection, left_field = split
+                if select_collection is None:
+                    select_collection = left_collection
+            elif select_collection is not None:
+                left_collection = select_collection
+            else:
+                raise ValueError('Cannot guess a collection for field "%s" in query' % left_field)
+            if left_collection not in from_collections:
+                from_collections[left_collection] = self.get_collection(left_collection)
+            left_field_type = from_collections[left_collection].fields.get(left_field)
+            if left_field_type is None:
+                raise TypeError('Cannot query on %s.%s, field does not exists' % (left_collection, left_field))
                 
+            split = operation.split(None, 1)
+            if len(split) == 2 and split[0] in self._operators:
+                operator, operand = split
+            else:
+                operator = '='
+                operand = operation
+            
+            if operand.startswith('$'):
+                if operand.startswith('$$'):
+                    where_construct.append(('field_op_literal', left_collection, left_field, operator, operand[1:]))
+                else:
+                    split = operand[1:].rsplit('.', 1)
+                    if len(split) == 2:
+                        right_collection, right_field = split
+                    elif select_collection is not None:
+                        right_collection = select_collection
+                        right_field = operand[1:]
+                    else:
+                        raise ValueError('Cannot guess a collection for field "%s" in query' % operand)
+                    if right_collection not in from_collections:
+                        from_collections[right_collection] = self.get_collection(right_collection)
+                    right_field_type = from_collections[right_collection].fields.get(right_field)
+                    if right_field_type is None:
+                        raise TypeError('Cannot query on %s.%s, field does not exists' % (right_collection, right_field))
+                    elif operator == 'in' and right_field_type[0] is not list:
+                        raise TypeError('Cannot use operator "in" on %s.%s field of type %s; a list type is expected' % (right_collection, right_field, _field_type_to_string[right_field_type]))
+                    else:
+                        where_construct.append(('field_op_field', left_collection, left_field, operator, right_collection, right_field))
+            else:
+                where_construct.append(('field_op_literal', left_collection, left_field, operator, operand))
+        return self._build_query(from_collections, ['and'] + where_construct)
+
+    def _build_query(self, select_collection, from_collections, where_construct):
+        raise NotImplementedError()
+
 class DoqapyCollection(object):
     _field_type_from_value_type = {
         str: text_field_type,
@@ -263,7 +379,8 @@ class DoqapyCollection(object):
         '''
         raise NotImplementedError()
 
-
+       
+        
 def connect(url):
     '''
     Create a Doqapy database connection according to the given URL. The
