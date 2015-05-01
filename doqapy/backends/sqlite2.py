@@ -6,7 +6,7 @@ import os
 import os.path as osp
 import datetime
 import sqlite3
-
+import dateutil
 
 from doqapy import (
     DoqapyDatabase, 
@@ -142,11 +142,10 @@ class DoqapySqliteDatabase(DoqapyDatabase):
     def query(self, *args, **kwargs):
         dict_query = self.parse_query(*args, **kwargs)
         sql = dict_query['sql']
-        fields = [(i,_sql_to_value[_string_to_field_type[j]]) for i, j in dict_query['fields'].iteritems()]
-        print '!', sql
+        fields = [(i, DoqapySqliteCollection._sql_to_value.get(j,lambda x: x)) for i, j in dict_query['fields']]
         cursor = self._cnx.execute(sql)
         for row in cursor:
-            yield dict((col[0], self._sql_to_value[?](row[idx])) for idx, col in enumerate(cursor.description))
+            yield dict((fields[i][0], fields[i][1](value)) for i, value in enumerate(row))
         
 class DoqapySqliteCollection(DoqapyCollection):
     _fields_table = '_%s_fields'
@@ -375,7 +374,10 @@ if __name__ == '__main__':
     doqapy.yaml_restore(open('/tmp/test.yml'))
 
     query = {
-        #'subjects.in_study': '$studies._ref',
+        'subjects.in_study': '$studies._ref',
         'studies.name': 'study000',
     }
-    print list(doqapy.query(query))#, select_collection='subjects'))
+    
+    from pprint import pprint
+    pprint(list(doqapy.query(query, select_collection='subjects')))
+    
