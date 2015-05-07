@@ -7,6 +7,7 @@ import os.path as osp
 import datetime
 import sqlite3
 import dateutil
+from collections import OrderedDict
 
 from doqapy import (
     DoqapyDatabase, 
@@ -31,7 +32,8 @@ from doqapy import (
     list_time_field_type,
     list_ref_field_type,
 )
-
+from doqapy.grammar import grammar
+from .ast_to_sqlite import ASTToSQLite
 
         
 class DoqapySqliteDatabase(DoqapyDatabase):    
@@ -105,47 +107,25 @@ class DoqapySqliteDatabase(DoqapyDatabase):
         self._cnx.execute('VACUUM')
         self._init_database()
     
-    def _build_query(self, from_collections, where_construct):
-        select_collection, select_collection_impl = from_collections.iteritems().next()
-        select = ', '.join('%s.%s' % (select_collection_impl.table, i) for i in select_collection_impl.fields)
-        from_ = ', '.join(i.table for i in from_collections.itervalues())
+    
+    def parse_query(self, query):
+        ast = grammar.parse(query)
+        parser = ASTToSQLite(self)
+        sql = parser.visit(ast)
         return {
-            'sql': 'SELECT %s FROM %s WHERE %s' % (select, from_, self._query_builder_expression(from_collections, *where_construct)),
-            'fields': select_collection_impl.fields.items(),
+            'sql': sql,
+            'fields': parser.rows.values(),
         }
-    
-    def _query_builder_expression(self, from_collections, expression_type, *args):
-        return getattr(self, '_query_builder_%s' % expression_type)(from_collections, *args)
-    
-    def _query_builder_and(self, from_collections, *expressions):
-        return ' AND '.join(self._query_builder_expression(from_collections, *i) for i in expressions)
-    
-    def _query_builder_field_op_literal(self, from_collections, left_collection, left_field, operator, literal):
-        left_table = from_collections[left_collection].table
-        if operator == 'in':
-            literal = '(%s)' % literal
-        else:
-            literal = "'%s'" % literal
-        return '%s.%s %s %s' % (left_table, left_field, operator, literal)
         
-    def _query_builder_field_op_field(self, from_collections, left_collection, left_field, operator, right_collection, right_field):
-        left_table = from_collections[left_collection].table
-        right_table = from_collections[right_collection].table
-        if operator == 'in':
-            right_field_type = from_collections[right_collection].fields[right_field]
-            if right_field_type[0] is not list:
-                raise TypeError('Cannot use operator "in" on %s.%s that is not a list' % (right_collection, right_field))
-            return '%(left_table)s.%(left_field)s IN (SELECT value FROM _%(right_table)s_list_%(right_field)s WHERE _%(right_table)s_list_%(right_field)s.list = %(right_table)s.rowid)' % dict(left_table=left_table, left_field=left_field, right_table=right_table, right_field=right_field)
-        else:
-            return '%(left_table)s.%(left_field)s %(operator)s %(right_table)s.%(right_field)s' % dict(left_table=left_table, left_field=left_field, right_table=right_table, right_field=right_field, operator=operator)
-
-    def query(self, *args, **kwargs):
-        dict_query = self.parse_query(*args, **kwargs)
-        sql = dict_query['sql']
-        fields = [(i, DoqapySqliteCollection._sql_to_value.get(j,lambda x: x)) for i, j in dict_query['fields']]
+    def execute(self, query):
+        if not isinstance(query,dict):
+            query = self.parse_query(query)
+        sql = query['sql']
+        fields = [(i, DoqapySqliteCollection._sql_to_value.get(j,lambda x: x)) for i, j in query['fields']]
         cursor = self._cnx.execute(sql)
         for row in cursor:
             yield dict((fields[i][0], fields[i][1](value)) for i, value in enumerate(row))
+    
         
 class DoqapySqliteCollection(DoqapyCollection):
     _fields_table = '_%s_fields'
@@ -202,7 +182,7 @@ class DoqapySqliteCollection(DoqapyCollection):
         self.collection = collection
         self.table = table
         # read fields
-        self._fields = dict((k, _string_to_field_type[v]) for k, v in 
+        self._fields = OrderedDict((k, _string_to_field_type[v]) for k, v in 
             connection.execute(
                 'SELECT name, type from %s' % self._fields_table % table))
     
@@ -282,102 +262,4 @@ class DoqapySqliteCollection(DoqapyCollection):
         sql = 'SELECT %s FROM %s' % (','.join(columns), self.table)
         for row in self.cnx.execute(sql):
             yield dict((columns[i], row[i]) for i in xrange(len(columns)) if row[i] is not None)
-        
-    
-if __name__ == '__main__':
-    import sys
-    from random import random
-    from collections import OrderedDict
-    
-    db_file = '/tmp/test.sqlite'
-    if osp.exists(db_file):
-        os.remove(db_file)
-    doqapy = DoqapySqliteDatabase(db_file)
-    
-    #for c in ('subject','action','output','files'):
-        #doqapy.create_collection(c)
-    #for f, t, i in (
-        #('subject.code', 'unicode', True),
-        #('action.concerns', 'list_ref', False),
-        #('output._to', 'ref', True),
-        #('output._from', 'ref', True),
-        #('output.parameter', 'unicode', True)):
-        #doqapy.create_field(f, t, i)
-    #query = OrderedDict([
-        #('files._ref', '= $output._to'),
-        #('subject.code', 'memento_001007_BOND'),
-        #('subject._ref', 'in $action.concerns'),
-        #('output._from', '= $action._ref'),
-        #('output.parameter', '= mri_3dt1_nifi')])
-    #sql = doqapy.parse_query(query)
-    #print sql
-    #print list(doqapy._cnx.execute(sql))
-    #sys.exit()
-    
-    
-    doqapy.create_collection('studies')
-    
-    doqapy.create_collection('subjects')
-    doqapy.create_field('subjects.code', 'unicode', create_index=True)
-    doqapy.create_field('subjects.in_study', 'ref', create_index=True)
-    
-    number_of_studies = 2
-    number_of_subjects_per_study = 4
-    number_of_acquisition_per_subject = 4
-    number_of_files_per_acquisition = 4
-    number_of_measures_per_acquisition = 4
-    
-    studies = []
-    subjects = []
-    for i in xrange(number_of_studies):
-        study_name = 'study%03d' % i
-        now = datetime.datetime.now()
-        study = dict(
-            _ref = 'studies/',
-            name = study_name,
-            expected_subjects = number_of_subjects_per_study,
-            creation_datetime = now,
-            creation_date = now.date(),
-            creation_time = now.time()
-        )
-        studies.append(doqapy.store_document(study))
-        doqapy.commit()
-        
-        for j in xrange(number_of_subjects_per_study):
-            subject_id = 'subject%03d' % j
-            subject_code = '%s_%s' % (study_name, subject_id)
-            print subject_code
-            subject = dict(
-                code = subject_code,
-                in_study = studies[-1],
-            )
-            subjects.append(doqapy.store_document(subject, collection='subjects'))
             
-            for k in xrange(number_of_acquisition_per_subject):
-                acquisition_type = '%s_acquisition%03d' % (subject_code, k)
-                acquisition = dict(
-                    type = acquisition_type,
-                )
-                for l in xrange(number_of_files_per_acquisition):
-                    acquisition['file_%02d' % l] = '/%s/%s/acquisition_%02d.format' % (study_name, subject_id, l)
-                for l in xrange(number_of_measures_per_acquisition):
-                    acquisition['aquisition_measure_%02d' % l] = random() * 100
-                doqapy.store_document(acquisition, collection='%s/acquisitions' % study_name)
-            doqapy.commit()
-    
-    doqapy.commit()
-    
-    print
-    print 'Dumping to /tmp/test.yml'
-    doqapy.yaml_dump(open('/tmp/test.yml','w'))
-    print 'Restoring from /tmp/test.yml'
-    doqapy.yaml_restore(open('/tmp/test.yml'))
-
-    query = {
-        'subjects.in_study': '$studies._ref',
-        'studies.name': 'study000',
-    }
-    
-    from pprint import pprint
-    pprint(list(doqapy.query(query, select_collection='subjects')))
-    

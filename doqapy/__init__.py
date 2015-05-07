@@ -234,63 +234,6 @@ class DoqapyDatabase(object):
                 self.commit()
         self.commit()
         
-    _operators = set(('=', '>', '<', '>=', '<=', '!=', 'in', 'has', 'like', '~'))
-    
-    def parse_query(self, query, select_collection=None):
-        where_construct = []
-        from_collections = OrderedDict()
-        if select_collection is not None:
-            from_collections[select_collection] = self.get_collection(select_collection)
-        for left_field, operation in query.iteritems():
-            split = left_field.rsplit('.', 1)
-            if len(split) == 2:
-                left_collection, left_field = split
-                if select_collection is None:
-                    select_collection = left_collection
-            elif select_collection is not None:
-                left_collection = select_collection
-            else:
-                raise ValueError('Cannot guess a collection for field "%s" in query' % left_field)
-            if left_collection not in from_collections:
-                from_collections[left_collection] = self.get_collection(left_collection)
-            left_field_type = from_collections[left_collection].fields.get(left_field)
-            if left_field_type is None:
-                raise TypeError('Cannot query on %s.%s, field does not exists' % (left_collection, left_field))
-                
-            split = operation.split(None, 1)
-            if len(split) == 2 and split[0] in self._operators:
-                operator, operand = split
-            else:
-                operator = '='
-                operand = operation
-            
-            if operand.startswith('$'):
-                if operand.startswith('$$'):
-                    where_construct.append(('field_op_literal', left_collection, left_field, operator, operand[1:]))
-                else:
-                    split = operand[1:].rsplit('.', 1)
-                    if len(split) == 2:
-                        right_collection, right_field = split
-                    elif select_collection is not None:
-                        right_collection = select_collection
-                        right_field = operand[1:]
-                    else:
-                        raise ValueError('Cannot guess a collection for field "%s" in query' % operand)
-                    if right_collection not in from_collections:
-                        from_collections[right_collection] = self.get_collection(right_collection)
-                    right_field_type = from_collections[right_collection].fields.get(right_field)
-                    if right_field_type is None:
-                        raise TypeError('Cannot query on %s.%s, field does not exists' % (right_collection, right_field))
-                    elif operator == 'in' and right_field_type[0] is not list:
-                        raise TypeError('Cannot use operator "in" on %s.%s field of type %s; a list type is expected' % (right_collection, right_field, _field_type_to_string[right_field_type]))
-                    else:
-                        where_construct.append(('field_op_field', left_collection, left_field, operator, right_collection, right_field))
-            else:
-                where_construct.append(('field_op_literal', left_collection, left_field, operator, operand))
-        return self._build_query(from_collections, ['and'] + where_construct)
-
-    def _build_query(self, select_collection, from_collections, where_construct):
-        raise NotImplementedError()
 
 class DoqapyCollection(object):
     _field_type_from_value_type = {
@@ -384,28 +327,16 @@ class DoqapyCollection(object):
 def connect(url):
     '''
     Create a Doqapy database connection according to the given URL. The
-    URL has the following form : <backend>:[<protocol>:]//<path> where
+    URL has the following form : <backend>:<database> where
+    <backend> identify the type of database that is used and <database>
+    is a backend specific value containing database connection information.
     <backend> can be one of the following:
-    sqlite : An implementation for a single client (not thread safe) using
-             sqlite. For this backend, <protocol> must be empty and path
-             must be either a non existing directory that will be created
-             or a directory previously created by a Doqapy SQLite backend.
-    arangodb : Not implemented yet. An implementation based on ArangoDB.
-    mongodb : Not finished yet, raises an error if used. An implementation
-              based on MongoDB.
-    catidb : Not implemented yet. A read-only implementation based on 
-             Cubicweb with catidb schema.
+    sqlite : A SQLite implementation. All Doqapy insertions and queries
+             are converted to SQL and used with a SQLite database. <storage>
+             must be a valid value for a SQLite connection (e.g. a file name
+             or ':memory:').
     '''
-    backend, protocol_path = url.split(':', 1)
+    backend, storage = url.split(':', 1)
     if backend == 'sqlite':
-        from .backends.sqlite import DoqapySqlite
-        if not protocol_path.startswith('//'):
-            raise ValueError('Invalid Doqapy urL for sqlite backend: %s' % url)
-        path = protocol_path[2:]
-        return DoqapySqlite(path)
-    elif backend == 'arangodb':
-        raise NotImplementedError()
-    elif backend == 'mongodb':
-        raise NotImplementedError()
-    elif backend == 'catidb':
-        raise NotImplementedError()
+        from .backends.sqlite.api import DoqapySqliteDatabase
+        return DoqapySqliteDatabase(storage)
