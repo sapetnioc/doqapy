@@ -93,14 +93,6 @@ if __name__ == '__main__':
     doqapy.yaml_dump(open('/tmp/test.yml','w'))
     print 'Restoring from /tmp/test.yml'
     doqapy.yaml_restore(open('/tmp/test.yml'))
-
-    #query = {
-        #'subject.in_study': '$study._ref',
-        #'study.name': 'study000',
-    #}
-    
-    #from pprint import pprint
-    #pprint(list(doqapy.query(query, select_collection='subject')))
     
     query ='''
     select file, acquisition.type, study.name as study_name 
