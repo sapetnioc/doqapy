@@ -101,7 +101,7 @@ if __name__ == '__main__':
     subject in acquisition
     '''
     
-    query = 'select subject where subject.in_study = study and study.name = "study000"'    
+    query = 'select subject where subject.in_study = study and study.name = "study001"'    
     
     print query
     query = doqapy.parse_query(query)

@@ -111,20 +111,24 @@ class DoqapySqliteDatabase(DoqapyDatabase):
     def parse_query(self, query):
         ast = grammar.parse(query)
         parser = ASTToSQLite(self)
-        sql = parser.visit(ast)
+        sql = parser.parse_query(ast)
         return {
             'sql': sql,
-            'fields': parser.rows.values(),
+            'fields': parser.columns.values(),
         }
         
-    def execute(self, query):
+    def execute(self, query, values_only=False):
         if not isinstance(query,dict):
             query = self.parse_query(query)
         sql = query['sql']
         fields = [(i, DoqapySqliteCollection._sql_to_value.get(j,lambda x: x)) for i, j in query['fields']]
+        print '!sql!', sql
         cursor = self._cnx.execute(sql)
         for row in cursor:
-            yield dict((fields[i][0], fields[i][1](value)) for i, value in enumerate(row))
+            if values_only:
+                yield tuple(fields[i][1](value) for i, value in enumerate(row))
+            else:
+                yield dict((fields[i][0], fields[i][1](value)) for i, value in enumerate(row))
     
         
 class DoqapySqliteCollection(DoqapyCollection):

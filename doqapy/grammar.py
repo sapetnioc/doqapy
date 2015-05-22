@@ -1,9 +1,7 @@
 from parsimonious.grammar import Grammar
 
 grammar = Grammar('''
-query = _? ( select_where / select_only / where_only ) _?
-select_only = select
-where_only = where
+query = _? ( select_where / select / where ) _?
 select_where = select _ where
 _ = ~"[ \\n\\t]+"
 select = ~"select"i _ select_item (_? "," _? select_item)*

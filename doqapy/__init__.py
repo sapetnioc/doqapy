@@ -128,7 +128,7 @@ class DoqapyDatabase(object):
     def create_collection(self, collection):
         '''Create a new collection with the given. The caller must be
         sure that the collection does not exists (i.e. 
-        self._get_collection(collection) returns None).
+        self.get_collection(collection,None) returns None).
         '''
         raise NotImplementedError()
 
@@ -142,12 +142,17 @@ class DoqapyDatabase(object):
         '''
         raise NotImplementedError()
 
-    def create_field(self, field_name, field_type, create_index=False):
+    def create_field(self, field_name, field_type, create_index=False, create_collection=False):
         split = field_name.rsplit('.', 1)
         if len(split) != 2:
             raise ValueError('Invalid field name (dot is missing): %s' % field_name)
         collection, field_name = split
-        collection_impl = self.get_collection(collection)
+        if create_collection:
+            collection_impl = self.get_collection(collection, None)
+            if collection_impl is None:
+                collection_impl = self.create_collection(collection)
+        else:
+            collection_impl = self.get_collection(collection)
         collection_impl.create_field(field_name, _string_to_field_type[field_type])
         if create_index:
             collection_impl.create_index(field_name)

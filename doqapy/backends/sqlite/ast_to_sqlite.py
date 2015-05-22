@@ -1,47 +1,16 @@
 from parsimonious.nodes import NodeVisitor
 from collections import OrderedDict
+import operator
 
-class ASTToSQLite(NodeVisitor):
-    def __init__(self, doqapy_db):
-        self.db = doqapy_db
-        self.rows = OrderedDict()
-        self.from_tables = OrderedDict()
+class WhereVisitor(NodeVisitor):
+    def __init__(self, parser):
+        self.db = parser.db
+        self.columns = parser.columns
+        self.from_tables = parser.from_tables
     
     def collection_to_table(self, collection):
         return self.db.get_collection(collection).table
-    
-        
-    def visit_select_where(self, n, vc):
-        vc = [i for i in vc if i]
-        return '%s %s' % (self.visit_select_only(), vc[0])
-    
-    def visit_select(self, n, vc):
-        return None
-    
-    def visit_select_only(self, n=None, vc=None):
-        return 'SELECT %s FROM %s' % (', '.join(self.rows), ', '.join(self.from_tables))
-    
-    def visit_select_item(self, n, vc):
-        vc = [i for i in vc if i]
-        if len(vc) == 1 and isinstance(vc[0], list):
-            vc = vc[0]
-        collection, field = vc[0]
-        if field is None:
-            collection = self.db.get_collection(collection)
-            for field in collection.fields:
-                self.rows['%s.%s' % (collection.table, field)] = ('%s.%s' % (collection.collection, field),
-                                                                             collection.fields[field])
-        else:
-            collection = self.db.get_collection(collection)
-            if len(vc) > 1:
-                name = vc[1][1]
-                self.rows['%s.%s AS %s' % (collection.table, field, name)] = (name,collection.fields[field])
-            else:
-                self.rows['%s.%s' % (collection.table, field)] = ('%s.%s' % (collection.collection, field),
-                                                                  collection.fields[field])
-        self.from_tables[collection.table] = collection.collection
-        return None
-        
+            
     def visit_where(self, n, vc):
         vc = [i for i in vc if i]
         return 'WHERE %s' % vc[1]
@@ -69,8 +38,14 @@ class ASTToSQLite(NodeVisitor):
         return '%s %s %s' % (left, op, right)
       
     def visit_collection_field(self, n, vc):
-        collection, p, field = [i for i in vc if i]
-        return (collection[0], field)
+        vc = [i for i in vc if i]
+        if len(vc) == 3:
+            collection, p, field = vc
+            collection = collection[0]
+        else:
+            collection = None
+            field = vc[1]
+        return (collection, field)
     
     def visit_string(self, n, vc):
         return n.text
@@ -79,7 +54,14 @@ class ASTToSQLite(NodeVisitor):
         return None
 
     def visit_collection_path(self, n, vc):
-        collection = [i for i in vc if i][0]
+        vc = [i for i in vc if i]
+        if len(vc) == 2:
+            if isinstance(vc[1][0], list):
+                collecion = ''.join([vc[0]]+reduce(operator.add,vc[1]))
+            else:
+                collection = ''.join([vc[0]] + vc[1])
+        else:
+            collection = vc[0]
         return (collection, None)
         
     def visit_in_operator(self, n, vc):
@@ -128,3 +110,71 @@ class ASTToSQLite(NodeVisitor):
             return l
         else:
             return n.text
+
+class ASTToSQLite(object):
+    def __init__(self, doqapy_db):
+        self.db = doqapy_db
+        self.columns = OrderedDict()
+        self.from_tables = OrderedDict()
+    
+    def collection_to_table(self, collection):
+        return self.db.get_collection(collection).table
+    
+    def default_collection(self):
+        if self.from_tables:
+            return self.db.get_collection(self.from_tables.itervalues().next())
+        else:
+            raise ValueError('Query does not allow to identify a default collecion')
+    
+    def parse_query(self, node):
+        query = node.children[1].children[0]
+        if query.expr_name == 'select_where':
+            where = self.parse_where(query.children[2])
+            self.parse_select(query.children[0])
+        elif query.expr_name == 'where':
+            where = self.parse_where(query)
+            collection = self.default_collection()
+            for field in collection.fields:
+                self.columns['%s.%s' % (collection.table, field)] = ('%s.%s' % (collection.collection, field),
+                                                                     collection.fields[field])
+        else:
+            self.parse_select(query)
+            where = None
+        select = 'SELECT %s FROM %s' % (', '.join(self.columns), ', '.join(self.from_tables))
+        if where:
+            return '%s %s' % (select, where)
+        else:
+            return select
+            
+    def parse_select(self, node):
+        self.parse_select_item(node.children[2])
+        for i in node.children[3].children:
+            self.parse_select_item(i.children[3])
+
+    def parse_select_item(self, node):
+        node = node.children[0]
+        if node.expr_name == 'collection_path':
+            collection = self.db.get_collection(node.text)
+            collection_table = collection.table
+            self.from_tables[collection.table] = collection.collection
+            for field in collection.fields:
+                self.columns['%s.%s' % (collection_table, field)] = ('%s.%s' % (collection.collection, field),
+                                                                     collection.fields[field])
+        else:
+            collection_field, alias = node.children
+            collection = collection_field.children[0].text
+            if not collection:
+                collection = self.default_collection()
+            else:
+                collection = self.db.get_collection(collection)
+                self.from_tables[collection.table] = collection.collection
+            field = collection_field.children[2].text
+            if alias.children:
+                alias = alias.children[0].children[3].text
+                self.columns['%s.%s AS %s' % (collection.table, field, alias)] = (alias,collection.fields[field])
+            else:
+                self.columns['%s.%s' % (collection.table, field)] = ('%s.%s' % (collection.collection, field),
+                                                                     collection.fields[field])
+
+    def parse_where(self, node):
+        return WhereVisitor(self).visit(node)
