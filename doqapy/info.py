@@ -9,3 +9,5 @@ __version__ = '%d.%d.%d' % (
 
 NAME = "doqapy"
 ORGANISATION = "BrainVISA"
+LICENSE="CeCILL-B"
+
