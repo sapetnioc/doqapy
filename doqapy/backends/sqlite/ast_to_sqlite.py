@@ -1,3 +1,4 @@
+import six
 from parsimonious.nodes import NodeVisitor
 from collections import OrderedDict
 import operator
@@ -122,7 +123,7 @@ class ASTToSQLite(object):
     
     def default_collection(self):
         if self.from_tables:
-            return self.db.get_collection(self.from_tables.itervalues().next())
+            return six.itervalues(self.db.get_collection(self.from_tables).next())
         else:
             raise ValueError('Query does not allow to identify a default collecion')
     

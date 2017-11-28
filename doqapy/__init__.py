@@ -20,13 +20,15 @@ two backends are supported : SQLite and MongoDB (however queriying on exact
 list value is not implemented yet on MongoDB backend). A catidb backend
 is planned.
 '''
+from __future__ import print_function
 
+import six
 import datetime
 import uuid
 import dateutil.parser
 from collections import OrderedDict
 
-text_field_type = (unicode, None)
+text_field_type = (six.text_type, None)
 int_field_type = (int, None)
 float_field_type = (float, None)
 bool_field_type = (bool, None)
@@ -34,7 +36,7 @@ ref_field_type = (object, None)
 datetime_field_type = (datetime.datetime, None)
 date_field_type = (datetime.date, None)
 time_field_type = (datetime.time, None)
-list_text_field_type = (list, unicode)
+list_text_field_type = (list, six.text_type)
 list_int_field_type = (list, int)
 list_float_field_type = (list, float)
 list_bool_field_type = (list, bool)
@@ -63,7 +65,7 @@ _field_type_to_string = {
 }
 
 _string_to_field_type = dict((v,k) for k, v in 
-                             _field_type_to_string.iteritems())
+                             _field_type_to_string.items())
 
 undefined = type('undefined',(),{})
 
@@ -108,12 +110,12 @@ class DoqapyDatabase(object):
             collection_impl.create_field('_ref', text_field_type)
             collection_impl.create_index('_ref')
     
-        for k, v in document.iteritems():
+        for k, v in six.iteritems(document):
             if k not in fields:
                 try:
                     field_type = collection_impl.field_type_from_value(v)
-                except TypeError, e:
-                    raise TypeError('In value for "%s": %s' % (k, unicode(e)))
+                except TypeError as e:
+                    raise TypeError('In value for "%s": %s' % (k, six.text_type(e)))
                 fields = collection_impl.create_field(k, field_type)
         ref = '%s/%s' % (collection, id)
         collection_impl._store_document(document, id, ref)
@@ -170,7 +172,7 @@ class DoqapyDatabase(object):
         data type
         '''
         collection_impl = self.get_collection(collection)
-        return dict((k,_field_type_to_string[v]) for k, v in collection_impl.fields.iteritems())
+        return dict((k,_field_type_to_string[v]) for k, v in six.iteritems(collection_impl.fields))
     
     def indices(self, collection):
         '''Return a list of all fields that have an index.
@@ -194,19 +196,19 @@ class DoqapyDatabase(object):
         # who do not call this function
         import yaml
         ignore_fields = set(('_id', '_ref'))
-        print >> file, '# Schema\n---'
+        print('# Schema\n---', file=file)
         schema = {}
         for collection in self.collections():
             collection_dict = schema[collection] = {
-                'fields': dict((k,v) for k, v in self.fields(collection).iteritems() if k not in ignore_fields),
+                'fields': dict((k,v) for k, v in six.iteritems(self.fields(collection)) if k not in ignore_fields),
                 'indices': [i for i in self.indices(collection) if i not in ignore_fields],
             }
         yaml.safe_dump(schema, file, default_flow_style=False)
         
-        print >> file, '\n# Documents'
+        print('\n# Documents', file=file)
         for collection in self.collections():
             for document in self.documents(collection):
-                print >> file, '---'
+                print('---', file=file)
                 document.pop('_id')
                 yaml.safe_dump(document, file, default_flow_style=False)
 
@@ -218,11 +220,11 @@ class DoqapyDatabase(object):
         reader = yaml.load_all(file)
         
         # Restore schema
-        schema = reader.next()
+        schema = six.next(reader)
         self.drop_database()
-        for collection, collection_def in schema.iteritems():
+        for collection, collection_def in six.iteritems(schema):
             collection_impl = self.create_collection(collection)
-            for field_name, field_type in collection_def['fields'].iteritems():
+            for field_name, field_type in six.iteritems(collection_def['fields']):
                 collection_impl.create_field(field_name, _string_to_field_type[field_type])
             for field_name in collection_def.get('indices',[]):
                 collection_impl.create_index(field_name)
@@ -232,7 +234,7 @@ class DoqapyDatabase(object):
         count = 0
         for document in reader:
             fields = self.fields(document['_ref'][:document['_ref'].rfind('/')])
-            new_doc = dict((k,self._yaml_to_python.get(fields[k],lambda x:x)(v)) for k, v in document.iteritems())
+            new_doc = dict((k,self._yaml_to_python.get(fields[k],lambda x:x)(v)) for k, v in six.iteritems(document))
             self.store_document(new_doc)
             count += 1
             if count % 500:
@@ -241,27 +243,48 @@ class DoqapyDatabase(object):
         
 
 class DoqapyCollection(object):
-    _field_type_from_value_type = {
-        str: text_field_type,
-        unicode: text_field_type,
-        int: int_field_type,
-        float: float_field_type,
-        bool: bool_field_type,
-        datetime.datetime: datetime_field_type,
-        datetime.time: time_field_type,
-        datetime.date: date_field_type,
-    }
-    
-    _field_type_from_item_value_type = {
-        str: list_text_field_type,
-        unicode: list_text_field_type,
-        int: list_int_field_type,
-        float: list_float_field_type,
-        bool: list_bool_field_type,
-        datetime.datetime: list_datetime_field_type,
-        datetime.time: list_time_field_type,
-        datetime.date: list_date_field_type,
-    }
+    if six.PY2:
+        _field_type_from_value_type = {
+            str: text_field_type,
+            unicode: text_field_type,
+            int: int_field_type,
+            float: float_field_type,
+            bool: bool_field_type,
+            datetime.datetime: datetime_field_type,
+            datetime.time: time_field_type,
+            datetime.date: date_field_type,
+        }
+        
+        _field_type_from_item_value_type = {
+            str: list_text_field_type,
+            unicode: list_text_field_type,
+            int: list_int_field_type,
+            float: list_float_field_type,
+            bool: list_bool_field_type,
+            datetime.datetime: list_datetime_field_type,
+            datetime.time: list_time_field_type,
+            datetime.date: list_date_field_type,
+        }
+    else:
+        _field_type_from_value_type = {
+            str: text_field_type,
+            int: int_field_type,
+            float: float_field_type,
+            bool: bool_field_type,
+            datetime.datetime: datetime_field_type,
+            datetime.time: time_field_type,
+            datetime.date: date_field_type,
+        }
+        
+        _field_type_from_item_value_type = {
+            str: list_text_field_type,
+            int: list_int_field_type,
+            float: list_float_field_type,
+            bool: list_bool_field_type,
+            datetime.datetime: list_datetime_field_type,
+            datetime.time: list_time_field_type,
+            datetime.date: list_date_field_type,
+        }
     
     def field_type_from_value(self, value):
         '''Return a valid field type for a Python value or None if no
@@ -279,14 +302,14 @@ class DoqapyCollection(object):
     def create_field(self, field_name, field_type):
         """Create a new field given its name and its type which is one
         of the following :
-          - (unicode, None) : values are text
+          - (str, None) : values are text
           - (int, None) : values are integers
           - (float, None) : values are real numbers
           - (bool, None) : values are booleans
           - (datetime.time, None) : values are times
           - (datetime.date, None) : values are dates
           - (datetime.datetime, None) : values are dates+times
-          - (list, unicode) : values are list of text
+          - (list, str) : values are list of text
           - (list, int) : values are list of integers
           - (list, float) : values are list of real numbers
           - (list, bool) : values are list of booleans

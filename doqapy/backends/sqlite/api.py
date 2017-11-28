@@ -2,6 +2,9 @@
 Doqapy API implemented with SQLite
 '''
 
+from __future__ import print_function
+
+import six
 import os
 import os.path as osp
 import datetime
@@ -114,7 +117,7 @@ class DoqapySqliteDatabase(DoqapyDatabase):
         sql = parser.parse_query(ast)
         return {
             'sql': sql,
-            'fields': parser.columns.values(),
+            'fields': list(six.itervalues(parser.columns)),
         }
         
     def execute(self, query, values_only=False):
@@ -122,7 +125,7 @@ class DoqapySqliteDatabase(DoqapyDatabase):
             query = self.parse_query(query)
         sql = query['sql']
         fields = [(i, DoqapySqliteCollection._sql_to_value.get(j,lambda x: x)) for i, j in query['fields']]
-        print '!sql!', sql
+        print('!sql!', sql)
         cursor = self._cnx.execute(sql)
         for row in cursor:
             if values_only:
@@ -234,7 +237,7 @@ class DoqapySqliteCollection(DoqapyCollection):
         values = [id, ref]
         list_fields = []
         list_values = []
-        for k, v in document.iteritems():
+        for k, v in six.iteritems(document):
             if k in ('_id', '_ref'):
                 continue
             field_type = self._fields[k]
@@ -252,18 +255,18 @@ class DoqapySqliteCollection(DoqapyCollection):
         self.cnx.execute(sql, values)
         if list_fields:
             list_index = cnx.execute('SELECT last_insert_rowid()').fetchone()[0]
-            for i in xrange(len(list_fields)):
+            for i in six.moves.range(len(list_fields)):
                 field = list_fields[i]
                 list_table = self.list_table % (self.table, field)
                 sql = ('INSERT INTO %s '
                         '(list, i, value) '
                         'VALUES (?, ?, ?)' % list_table)
-                values = [[list_index,j,list_values[i][j]] for j in xrange(len(list_values[i]))]
+                values = [[list_index,j,list_values[i][j]] for j in six.moves.range(len(list_values[i]))]
                 cnx.executemany(sql, values)
     
     def documents(self):
         columns = list(self.fields)
         sql = 'SELECT %s FROM %s' % (','.join(columns), self.table)
         for row in self.cnx.execute(sql):
-            yield dict((columns[i], row[i]) for i in xrange(len(columns)) if row[i] is not None)
+            yield dict((columns[i], row[i]) for i in six.moves.range(len(columns)) if row[i] is not None)
             

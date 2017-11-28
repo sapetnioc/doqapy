@@ -1,4 +1,7 @@
+from __future__ import print_function
+
 if __name__ == '__main__':
+    import six
     import sys
     import os
     import os.path as osp
@@ -49,7 +52,7 @@ if __name__ == '__main__':
     
     studies = []
     subjects = []
-    for i in xrange(number_of_studies):
+    for i in six.moves.range(number_of_studies):
         study_name = 'study%03d' % i
         now = datetime.datetime.now()
         study = dict(
@@ -63,35 +66,35 @@ if __name__ == '__main__':
         studies.append(doqapy.store_document(study))
         doqapy.commit()
         
-        for j in xrange(number_of_subjects_per_study):
+        for j in six.moves.range(number_of_subjects_per_study):
             subject_id = 'subject%03d' % j
             subject_code = '%s_%s' % (study_name, subject_id)
-            print subject_code
+            print(subject_code)
             subject = dict(
                 code = subject_code,
                 in_study = studies[-1],
             )
             subjects.append(doqapy.store_document(subject, collection='subject'))
             
-            for k in xrange(number_of_acquisition_per_subject):
+            for k in six.moves.range(number_of_acquisition_per_subject):
                 acquisition_type = '%s_acquisition%03d' % (subject_code, k)
                 acquisition = dict(
                     type = acquisition_type,
                     concerns = [studies [-1], subjects[-1]],
                 )
-                for l in xrange(number_of_files_per_acquisition):
+                for l in six.moves.range(number_of_files_per_acquisition):
                     acquisition['file_%02d' % l] = '/%s/%s/acquisition_%02d.format' % (study_name, subject_id, l)
-                for l in xrange(number_of_measures_per_acquisition):
+                for l in six.moves.range(number_of_measures_per_acquisition):
                     acquisition['aquisition_measure_%02d' % l] = random() * 100
                 doqapy.store_document(acquisition, collection='acquisition')
             doqapy.commit()
     
     doqapy.commit()
     
-    print
-    print 'Dumping to /tmp/test.yml'
+    print()
+    print('Dumping to /tmp/test.yml')
     doqapy.yaml_dump(open('/tmp/test.yml','w'))
-    print 'Restoring from /tmp/test.yml'
+    print('Restoring from /tmp/test.yml')
     doqapy.yaml_restore(open('/tmp/test.yml'))
     
     query ='''
@@ -103,8 +106,8 @@ if __name__ == '__main__':
     
     query = 'select subject where subject.in_study = study and study.name = "study001"'    
     
-    print query
+    print(query)
     query = doqapy.parse_query(query)
-    print query
+    print(query)
     for document in doqapy.execute(query):
-        print document
+        print(document)
